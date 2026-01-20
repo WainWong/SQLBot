@@ -40,6 +40,8 @@ class OperationEnum(Enum):
     GENERATE_SQL_WITH_PERMISSIONS = '5'
     CHOOSE_DATASOURCE = '6'
     GENERATE_DYNAMIC_SQL = '7'
+    RECOGNIZE_INTENT = '8'  # 意图识别
+    GENERATE_CLARIFICATION = '9'  # 澄清追问生成
 
 
 class ChatFinishStep(Enum):
@@ -120,6 +122,8 @@ class ChatRecord(SQLModel, table=True):
     analysis_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
     predict_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
     regenerate_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
+    # 意图识别结果（JSON 格式存储，与 sql_answer 设计模式一致）
+    intent_answer: Optional[str] = Field(sa_column=Column(Text, nullable=True))
 
 
 class ChatRecordResult(BaseModel):
@@ -149,6 +153,9 @@ class ChatRecordResult(BaseModel):
     chart_reasoning_content: Optional[str] = None
     analysis_reasoning_content: Optional[str] = None
     predict_reasoning_content: Optional[str] = None
+    # 意图识别结果（JSON 格式存储）
+    intent_answer: Optional[str] = None
+    intent_response: Optional[str] = None  # 意图识别响应（供前端展示）
 
 
 class CreateChat(BaseModel):

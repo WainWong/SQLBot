@@ -209,6 +209,15 @@ const sendMessage = async () => {
                   _currentChat.value.datasource = data.id
                 }
                 break
+              case 'intent_other':
+              case 'clarification':
+                // 意图识别: OTHER 响应或澄清追问，显示在主内容区域
+                _currentChat.value.records[index.value].intent_response =
+                  (_currentChat.value.records[index.value].intent_response || '') + (data.content || '')
+                if (data.finish) {
+                  emits('finish', currentRecord.id)
+                }
+                break
               case 'finish':
                 emits('finish', currentRecord.id)
                 break

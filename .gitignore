@@ -189,3 +189,5 @@ test.py
 
 
 !/.venv/
+/.claude/
+/dev_doc/

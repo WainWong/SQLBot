@@ -237,6 +237,13 @@
                     @error="onChartAnswerError"
                     @stop="onChatStop"
                   >
+                    <!-- 意图识别响应 -->
+                    <div
+                      v-if="message.record?.intent_response"
+                      class="intent-response"
+                    >
+                      {{ message.record.intent_response }}
+                    </div>
                     <ErrorInfo :error="message.record?.error" class="error-container" />
                     <template #tool>
                       <ChatToolBar v-if="!message.isTyping" :message="message">
@@ -1265,6 +1272,20 @@ onMounted(() => {
   .send-btn {
     min-width: 0;
   }
+}
+
+.intent-response {
+  margin-top: 8px;
+  padding: 12px 16px;
+  font-weight: 400;
+  font-size: 16px;
+  line-height: 24px;
+  color: rgba(31, 35, 41, 1);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background-color: rgba(230, 247, 230, 0.6);
+  border-radius: 8px;
+  border-left: 3px solid rgba(82, 196, 82, 0.8);
 }
 
 .error-container {

@@ -16,7 +16,7 @@ from apps.db.engine import get_engine_config, get_engine_conn
 from common.core.config import settings
 from common.core.deps import SessionDep, CurrentUser, Trans
 from common.utils.embedding_threads import run_save_table_embeddings, run_save_ds_embeddings
-from common.utils.utils import deepcopy_ignore_extra
+from common.utils.utils import deepcopy_ignore_extra, SQLBotLogUtil
 from .table import get_tables_by_ds_id
 from ..crud.field import delete_field_by_ds_id, update_field
 from ..crud.table import delete_table_by_ds_id, update_table
@@ -422,6 +422,135 @@ def get_table_obj_by_ds(session: SessionDep, current_user: CurrentUser, ds: Core
                                               contain_rules=contain_rules)
         _list.append(TableAndFields(schema=schema, table=table, fields=fields))
     return _list
+
+
+def get_table_schema_by_names(session: SessionDep, current_user: CurrentUser, ds: CoreDatasource, table_names: List[str]) -> List[str]:
+    """根据表名列表获取详细 Schema (用于澄清追问)
+
+    Args:
+        session: 数据库会话
+        current_user: 当前用户（用于权限检查）
+        ds: 数据源对象
+        table_names: 表名列表
+
+    Returns:
+        Schema 字符串列表，格式如: "Table orders: 订单表 [order_id(int), amount(decimal), date(datetime)]"
+    """
+    all_tables = get_table_obj_by_ds(session=session, current_user=current_user, ds=ds)
+    target_tables = [t for t in all_tables if t.table.table_name in table_names]
+    
+    schemas = []
+    for t in target_tables:
+        # 获取表注释
+        table_comment = t.table.custom_comment or t.table.table_comment or ''
+        # 拼接字段信息
+        if t.fields:
+            fields_str = ", ".join([f"{f.field_name}({f.field_type})" for f in t.fields])
+        else:
+            fields_str = ""
+        schemas.append(f"Table {t.table.table_name}: {table_comment} [{fields_str}]")
+    
+    return schemas
+
+
+def get_mschema_by_table_names(session: SessionDep, current_user: CurrentUser,
+                                ds: CoreDatasource, table_names: List[str]) -> str:
+    """根据表名列表获取 M-Schema 格式（不做向量搜索）
+
+    用于意图识别返回 guess_tables 后，直接根据表名获取 Schema，跳过 RAG 搜索。
+    返回格式与 get_table_schema() 完全一致，以便 GENERATE_SQL 使用。
+
+    Args:
+        session: 数据库会话
+        current_user: 当前用户（用于权限检查）
+        ds: 数据源对象
+        table_names: 表名列表，如 ["orders", "products"]
+
+    Returns:
+        M-Schema 格式字符串，与 get_table_schema() 输出格式一致
+    """
+    table_objs = get_table_obj_by_ds(session=session, current_user=current_user, ds=ds)
+
+    # 大小写不敏感匹配
+    table_names_lower = [name.lower() for name in table_names]
+    filtered_objs = [obj for obj in table_objs if obj.table.table_name.lower() in table_names_lower]
+
+    SQLBotLogUtil.info(f"[get_mschema_by_table_names] guess_tables: {table_names}, "
+                       f"available_tables: {[obj.table.table_name for obj in table_objs]}, "
+                       f"matched: {[obj.table.table_name for obj in filtered_objs]}")
+
+    if not filtered_objs:
+        SQLBotLogUtil.warning(f"[get_mschema_by_table_names] No tables matched! guess_tables={table_names}")
+        return ""
+
+    db_name = filtered_objs[0].schema
+    schema_str = f"【DB_ID】 {db_name}\n【Schema】\n"
+
+    # 复制 get_table_schema() 的拼接逻辑，保持格式一致
+    for obj in filtered_objs:
+        schema_table = ''
+        schema_table += f"# Table: {db_name}.{obj.table.table_name}" if ds.type != "mysql" and ds.type != "es" else f"# Table: {obj.table.table_name}"
+        table_comment = ''
+        if obj.table.custom_comment:
+            table_comment = obj.table.custom_comment.strip()
+        if table_comment == '':
+            schema_table += '\n[\n'
+        else:
+            schema_table += f", {table_comment}\n[\n"
+
+        if obj.fields:
+            field_list = []
+            for field in obj.fields:
+                field_comment = ''
+                if field.custom_comment:
+                    field_comment = field.custom_comment.strip()
+                if field_comment == '':
+                    field_list.append(f"({field.field_name}:{field.field_type})")
+                else:
+                    field_list.append(f"({field.field_name}:{field.field_type}, {field_comment})")
+            schema_table += ",\n".join(field_list)
+        schema_table += '\n]\n'
+        schema_str += schema_table
+
+    # 表关系（Foreign keys）
+    if filtered_objs and ds.table_relation:
+        relations = list(filter(lambda x: x.get('shape') == 'edge', ds.table_relation))
+        if relations:
+            # 获取已匹配表的 ID 列表
+            matched_table_ids = [obj.table.id for obj in filtered_objs]
+
+            # 筛选与已匹配表相关的关系
+            all_relations = list(
+                filter(lambda x: x.get('source').get('cell') in matched_table_ids or x.get('target').get(
+                    'cell') in matched_table_ids, relations))
+
+            if all_relations:
+                # 获取关系中涉及的所有表 ID
+                relation_table_ids = []
+                for r in all_relations:
+                    relation_table_ids.append(r.get('source').get('cell'))
+                    relation_table_ids.append(r.get('target').get('cell'))
+                relation_table_ids = list(set(relation_table_ids))
+
+                # 获取表名映射
+                table_records = session.query(CoreTable).filter(CoreTable.id.in_(list(map(int, relation_table_ids)))).all()
+                table_dict = {ele.id: ele.table_name for ele in table_records}
+
+                # 获取字段名映射
+                relation_field_ids = []
+                for relation in all_relations:
+                    relation_field_ids.append(relation.get('source').get('port'))
+                    relation_field_ids.append(relation.get('target').get('port'))
+                relation_field_ids = list(set(relation_field_ids))
+                field_records = session.query(CoreField).filter(CoreField.id.in_(list(map(int, relation_field_ids)))).all()
+                field_dict = {ele.id: ele.field_name for ele in field_records}
+
+                # 拼接 Foreign keys
+                schema_str += '【Foreign keys】\n'
+                for ele in all_relations:
+                    schema_str += f"{table_dict.get(int(ele.get('source').get('cell')))}.{field_dict.get(int(ele.get('source').get('port')))}={table_dict.get(int(ele.get('target').get('cell')))}.{field_dict.get(int(ele.get('target').get('port')))}\n"
+
+    return schema_str
 
 
 def get_table_schema(session: SessionDep, current_user: CurrentUser, ds: CoreDatasource, question: str,

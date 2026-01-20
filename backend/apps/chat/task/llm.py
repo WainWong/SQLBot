@@ -29,13 +29,13 @@ from apps.chat.curd.chat import save_question, save_sql_answer, save_sql, \
     finish_record, save_analysis_answer, save_predict_answer, save_predict_data, \
     save_select_datasource_answer, save_recommend_question_answer, \
     get_old_questions, save_analysis_predict_record, rename_chat, get_chart_config, \
-    get_chat_chart_data, list_generate_sql_logs, list_generate_chart_logs, start_log, end_log, \
+    get_chat_chart_data, list_generate_sql_logs, list_generate_chart_logs, list_intent_logs, start_log, end_log, \
     get_last_execute_sql_error, format_json_data, format_chart_fields, get_chat_brief_generate, get_chat_predict_data, \
-    get_chat_chart_config
+    get_chat_chart_config, save_intent_answer
 from apps.chat.models.chat_model import ChatQuestion, ChatRecord, Chat, RenameChat, ChatLog, OperationEnum, \
     ChatFinishStep, AxisObj
 from apps.data_training.curd.data_training import get_training_template
-from apps.datasource.crud.datasource import get_table_schema
+from apps.datasource.crud.datasource import get_table_schema, get_table_schema_by_names, get_table_obj_by_ds, get_mschema_by_table_names
 from apps.datasource.crud.permission import get_row_permission_filters, is_normal_user
 from apps.datasource.embedding.ds_embedding import get_ds_embedding
 from apps.datasource.models.datasource import CoreDatasource
@@ -43,6 +43,7 @@ from apps.db.db import exec_sql, get_version, check_connection
 from apps.system.crud.assistant import AssistantOutDs, AssistantOutDsFactory, get_assistant_ds
 from apps.system.crud.parameter_manage import get_groups
 from apps.system.schemas.system_schema import AssistantOutDsSchema
+from apps.template.template import get_base_template
 from apps.terminology.curd.terminology import get_terminology_template
 from common.core.config import settings
 from common.core.db import engine
@@ -83,6 +84,8 @@ class LLMService:
 
     generate_sql_logs: List[ChatLog] = []
     generate_chart_logs: List[ChatLog] = []
+    intent_logs: List[ChatLog] = []  # 意图识别历史日志
+    intent_message: List[Union[BaseMessage, dict[str, Any]]] = []  # 意图识别消息列表
 
     current_logs: dict[OperationEnum, ChatLog] = {}
 
@@ -121,11 +124,14 @@ class LLMService:
                 if not ds:
                     raise SingleMessageError("No available datasource configuration found")
                 chat_question.engine = (ds.type_name if ds.type != 'excel' else 'PostgreSQL') + get_version(ds)
-                chat_question.db_schema = get_table_schema(session=session, current_user=current_user, ds=ds,
-                                                           question=chat_question.question, embedding=embedding)
+                # 当意图识别启用时，延迟 db_schema 设置，在 chat() 中根据 guess_tables 结果设置
+                if not settings.INTENT_RECOGNITION_ENABLED:
+                    chat_question.db_schema = get_table_schema(session=session, current_user=current_user, ds=ds,
+                                                               question=chat_question.question, embedding=embedding)
 
         self.generate_sql_logs = list_generate_sql_logs(session=session, chart_id=chat_id)
         self.generate_chart_logs = list_generate_chart_logs(session=session, chart_id=chat_id)
+        self.intent_logs = list_intent_logs(session=session, chat_id=chat_id)  # 初始化意图识别日志
 
         self.change_title = not get_chat_brief_generate(session=session, chat_id=chat_id)
 
@@ -227,6 +233,265 @@ class LLMService:
                 elif last_chart_message.get('type') == 'ai':
                     _msg = AIMessage(content=last_chart_message.get('content'))
                     self.chart_message.append(_msg)
+
+    def _get_all_tables_brief(self, session: Session) -> str:
+        """获取所有表名+注释的简要列表（用于意图识别）"""
+        table_objs = get_table_obj_by_ds(session=session, current_user=self.current_user, ds=self.ds)
+        lines = []
+        for obj in table_objs:
+            name = obj.table.table_name
+            comment = obj.table.custom_comment or obj.table.table_comment or "无备注"
+            lines.append(f"- {name}: {comment}")
+        return "\n".join(lines)
+
+    def init_intent_messages(self, session: Session):
+        """构建意图识别的消息列表（仿照 init_messages）"""
+        last_messages = self.intent_logs[-1].messages if len(self.intent_logs) > 0 else []
+
+        self.intent_message = []
+        # 1. System Prompt
+        table_list = self._get_all_tables_brief(session)
+        template = get_base_template()
+        intent_template = template['template']['intent_recognition']['system']
+        self.intent_message.append(SystemMessage(
+            content=intent_template.format(
+                table_list=table_list,
+                lang=self.chat_question.lang
+            )
+        ))
+
+        # 2. 历史消息（限制数量，仿照 sql_message）
+        count_limit = 0 - base_message_count_limit
+        if last_messages is not None and len(last_messages) > 0:
+            for msg in last_messages[count_limit:]:
+                if msg.get('type') == 'human':
+                    self.intent_message.append(HumanMessage(content=msg.get('content')))
+                elif msg.get('type') == 'ai':
+                    self.intent_message.append(AIMessage(content=msg.get('content')))
+
+    def _handle_intent_recognition(self, session: Session, in_chat: bool) -> Iterator[str]:
+        """处理意图识别（双阶段：意图识别 + 澄清器）
+        
+        Args:
+            session: 数据库会话
+            in_chat: 是否为聊天模式（SSE流式输出）
+            
+        Returns:
+            Generator[str]: SSE 消息流
+            最终返回 dict: {'should_return': bool, 'rewritten_query': str}
+        """
+        from apps.chat.intent import IntentType, IntentResult, ClarificationResult
+
+        # --- 阶段 1：意图识别 ---
+        # 1. 构建消息列表
+        self.init_intent_messages(session)
+        template = get_base_template()
+        intent_user_template = template['template']['intent_recognition']['user']
+        wrapped_question = intent_user_template.format(
+            current_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            question=self.chat_question.question
+        )
+        self.intent_message.append(HumanMessage(content=wrapped_question))
+
+        # 2. 记录 start_log
+        intent_log = start_log(
+            session=session,
+            ai_modal_id=self.chat_question.ai_modal_id,
+            ai_modal_name=self.chat_question.ai_modal_name,
+            operate=OperationEnum.RECOGNIZE_INTENT,
+            record_id=self.record.id,
+            full_message=[{'type': msg.type, 'content': msg.content} for msg in self.intent_message]
+        )
+
+        # 3. LLM 调用
+        full_text = ''
+        token_usage = {}
+        res = process_stream(self.llm.stream(self.intent_message), token_usage)
+        for chunk in res:
+            if chunk.get('content'):
+                full_text += chunk.get('content')
+
+        # 4. 解析结果 & 记录
+        json_str = extract_nested_json(full_text)
+        if json_str is None:
+            # 解析失败，默认按 QUERY + 清晰处理，直接使用原始问题进入 SQL 生成
+            SQLBotLogUtil.warning(f"意图识别 JSON 解析失败: {full_text}")
+            end_log(
+                session=session,
+                log=intent_log,
+                full_message=[{'type': msg.type, 'content': msg.content} for msg in self.intent_message],
+                token_usage=token_usage
+            )
+            self._intent_result = {'rewritten_query': self.chat_question.question}
+            return
+
+        try:
+            result = IntentResult(**orjson.loads(json_str))
+        except Exception as e:
+            SQLBotLogUtil.warning(f"意图识别结果格式错误: {e}")
+            end_log(
+                session=session,
+                log=intent_log,
+                full_message=[{'type': msg.type, 'content': msg.content} for msg in self.intent_message],
+                token_usage=token_usage
+            )
+            self._intent_result = {'rewritten_query': self.chat_question.question}
+            return
+
+        self.intent_message.append(AIMessage(content=full_text))
+        end_log(
+            session=session,
+            log=intent_log,
+            full_message=[{'type': msg.type, 'content': msg.content} for msg in self.intent_message],
+            token_usage=token_usage
+        )
+
+        # 5. 分支处理
+
+        # Case A: OTHER 意图
+        if result.intent == IntentType.OTHER:
+            # 保存意图识别结果
+            save_intent_answer(session=session, record_id=self.record.id, answer=orjson.dumps({
+                'intent': result.intent.value,
+                'response': result.response or ''
+            }).decode())
+            # 标记记录完成
+            finish_record(session=session, record_id=self.record.id)
+
+            if in_chat:
+                yield 'data:' + orjson.dumps({
+                    'type': 'intent_other',
+                    'content': result.response or '',
+                    'finish': True
+                }).decode() + '\n\n'
+            self._intent_result = {'should_return': True}
+            return
+
+        # Case B: QUERY + 清晰
+        if result.is_clear:
+            # 保存意图识别结果
+            save_intent_answer(session=session, record_id=self.record.id, answer=orjson.dumps({
+                'intent': result.intent.value,
+                'is_clear': True,
+                'rewritten_query': result.rewritten_query,
+                'guess_tables': result.guess_tables  # 新增：保存推荐的表名
+            }).decode())
+            self._intent_result = {
+                'rewritten_query': result.rewritten_query,
+                'guess_tables': result.guess_tables  # 新增：传递给主流程用于设置 db_schema
+            }
+            return
+
+        # Case C: QUERY + 模糊 -> 进入澄清流程
+        # 1. 根据 guess_tables 获取 Schema（使用 M-Schema 格式）
+        schemas = ""
+        if result.guess_tables:
+            schemas = get_mschema_by_table_names(session, self.current_user, self.ds, result.guess_tables)
+
+        # 2. 构建澄清 Prompt（复用 intent_message 结构，只替换 system prompt）
+        template = get_base_template()
+        clarification_template = template['template']['intent_clarification']['system']
+
+        # 构建新的 system prompt（包含表名列表 + 详细 Schema）
+        clarification_system = clarification_template.format(
+            table_list=self._get_all_tables_brief(session),
+            table_schemas=schemas if schemas else "无",
+            lang=self.chat_question.lang
+        )
+
+        # 复用 intent_message 的历史消息，只替换 system prompt（排除最后的 AI 回复）
+        clarification_msgs = [SystemMessage(content=clarification_system)] + self.intent_message[1:-1]
+
+        # 3. 记录澄清器的独立 Log
+        clarify_log = start_log(
+            session=session,
+            ai_modal_id=self.chat_question.ai_modal_id,
+            ai_modal_name=self.chat_question.ai_modal_name,
+            operate=OperationEnum.GENERATE_CLARIFICATION,
+            record_id=self.record.id,
+            full_message=[{'type': msg.type, 'content': msg.content} for msg in clarification_msgs]
+        )
+
+        # 4. LLM 调用 (澄清器)
+        clarify_text = ""
+        clarify_token_usage = {}
+        clarify_res = process_stream(self.llm.stream(clarification_msgs), clarify_token_usage)
+        for chunk in clarify_res:
+            if chunk.get('content'):
+                clarify_text += chunk.get('content')
+
+        # 解析澄清结果
+        clarify_json = extract_nested_json(clarify_text)
+        if clarify_json is None:
+            # 解析失败，默认进入 SQL 生成流程
+            SQLBotLogUtil.warning(f"澄清器 JSON 解析失败: {clarify_text}")
+            end_log(
+                session=session,
+                log=clarify_log,
+                full_message=[{'type': msg.type, 'content': msg.content} for msg in clarification_msgs],
+                token_usage=clarify_token_usage
+            )
+            self._intent_result = {'rewritten_query': self.chat_question.question}
+            return
+
+        try:
+            clarification = ClarificationResult(**orjson.loads(clarify_json))
+        except Exception as e:
+            SQLBotLogUtil.warning(f"澄清结果格式错误: {e}")
+            end_log(
+                session=session,
+                log=clarify_log,
+                full_message=[{'type': msg.type, 'content': msg.content} for msg in clarification_msgs],
+                token_usage=clarify_token_usage
+            )
+            self._intent_result = {'rewritten_query': self.chat_question.question}
+            return
+
+        # 5. 结束澄清器 Log
+        clarification_msgs.append(AIMessage(content=clarify_text))
+        end_log(
+            session=session,
+            log=clarify_log,
+            full_message=[{'type': msg.type, 'content': msg.content} for msg in clarification_msgs],
+            token_usage=clarify_token_usage
+        )
+
+        # 6. 保存意图识别结果（澄清追问）
+        save_intent_answer(session=session, record_id=self.record.id, answer=orjson.dumps({
+            'intent': result.intent.value,
+            'is_clear': False,
+            'guess_tables': result.guess_tables,
+            'response': clarification.response
+        }).decode())
+        # 标记记录完成
+        finish_record(session=session, record_id=self.record.id)
+
+        # 7. 返回澄清问题给前端
+        if in_chat:
+            yield 'data:' + orjson.dumps({
+                'type': 'clarification',
+                'content': clarification.response,
+                'finish': True
+            }).decode() + '\n\n'
+
+        # 8. 更新历史消息为完整 JSON 格式（保持格式一致性）
+        final_json = orjson.dumps({
+            'intent': result.intent.value,
+            'is_clear': False,
+            'guess_tables': result.guess_tables,
+            'response': clarification.response
+        }).decode()
+        self.intent_message[-1] = AIMessage(content=final_json)
+
+        # 9. 更新意图识别的 log（添加澄清问题到历史）
+        from sqlalchemy import update
+        stmt = update(ChatLog).where(ChatLog.id == intent_log.id).values(
+            messages=[{'type': msg.type, 'content': msg.content} for msg in self.intent_message]
+        )
+        session.execute(stmt)
+        session.commit()
+
+        self._intent_result = {'should_return': True}
 
     def init_record(self, session: Session) -> ChatRecord:
         self.record = save_question(session=session, current_user=self.current_user, question=self.chat_question)
@@ -983,6 +1248,35 @@ class LLMService:
             if not stream:
                 json_result['record_id'] = self.get_record().id
 
+            # ===== 新增：意图识别 =====
+            if settings.INTENT_RECOGNITION_ENABLED and self.ds:
+                self._intent_result = {}
+                yield from self._handle_intent_recognition(_session, in_chat)
+
+                if self._intent_result.get('should_return'):
+                    return
+
+                if self._intent_result.get('rewritten_query'):
+                    self.chat_question.question = self._intent_result['rewritten_query']
+
+                # 根据 guess_tables 设置 db_schema，跳过 RAG 搜索
+                if self._intent_result.get('guess_tables'):
+                    self.chat_question.db_schema = get_mschema_by_table_names(
+                        _session, self.current_user, self.ds,
+                        self._intent_result['guess_tables']
+                    )
+                    # 重新初始化消息，使用更新后的 db_schema
+                    self.init_messages()
+                elif not self.chat_question.db_schema:
+                    # fallback: 如果没有 guess_tables 且 db_schema 未设置，走原 RAG 流程
+                    self.chat_question.db_schema = get_table_schema(
+                        session=_session, current_user=self.current_user, ds=self.ds,
+                        question=self.chat_question.question
+                    )
+                    # 重新初始化消息，使用更新后的 db_schema
+                    self.init_messages()
+            # ===== 意图识别结束 =====
+
                 # select datasource if datasource is none
             if not self.ds:
                 ds_res = self.select_datasource(_session)
@@ -1507,9 +1801,9 @@ def process_stream(res: Iterator[BaseMessageChunk],
     in_thinking_block = False  # 标记是否在思考过程块中
     current_thinking = ''  # 当前收集的思考过程内容
     pending_start_tag = ''  # 用于缓存可能被截断的开始标签部分
+    full_content = ''  # 收集完整输出内容用于日志
 
     for chunk in res:
-        SQLBotLogUtil.info(chunk)
         reasoning_content_chunk = ''
         content = chunk.content
         output_content = ''  # 实际要输出的内容
@@ -1527,6 +1821,7 @@ def process_stream(res: Iterator[BaseMessageChunk],
         # 只有当current_thinking不是空字符串时才跳过标签解析
         if not in_thinking_block and current_thinking.strip() != '':
             output_content = content  # 正常输出content
+            full_content += output_content  # 收集完整内容
             yield {
                 'content': output_content,
                 'reasoning_content': reasoning_content_chunk
@@ -1587,11 +1882,15 @@ def process_stream(res: Iterator[BaseMessageChunk],
             # 不在思考块中或标签解析未启用，正常输出
             output_content += content
 
+        full_content += output_content  # 收集完整内容
         yield {
             'content': output_content,
             'reasoning_content': reasoning_content_chunk
         }
         get_token_usage(chunk, token_usage)
+
+    # 流式输出完成后，记录完整内容日志
+    SQLBotLogUtil.debug(f"LLM stream output: {full_content}")
 
 
 def get_lang_name(lang: str):

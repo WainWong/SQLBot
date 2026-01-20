@@ -13,7 +13,7 @@ from apps.datasource.crud.recommended_problem import get_datasource_recommended_
 from apps.datasource.models.datasource import CoreDatasource
 from apps.system.crud.assistant import AssistantOutDsFactory
 from common.core.deps import CurrentAssistant, SessionDep, CurrentUser, Trans
-from common.utils.utils import extract_nested_json
+from common.utils.utils import extract_nested_json, SQLBotLogUtil
 
 
 def get_chat_record_by_id(session: SessionDep, record_id: int):
@@ -283,7 +283,7 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                    ChatRecord.datasource_select_answer, ChatRecord.analysis_record_id, ChatRecord.predict_record_id,
                    ChatRecord.regenerate_record_id,
                    ChatRecord.recommended_question, ChatRecord.first_chat,
-                   ChatRecord.finish, ChatRecord.error,
+                   ChatRecord.finish, ChatRecord.error, ChatRecord.intent_answer,
                    sql_alias_log.reasoning_content.label('sql_reasoning_content'),
                    chart_alias_log.reasoning_content.label('chart_reasoning_content'),
                    analysis_alias_log.reasoning_content.label('analysis_reasoning_content'),
@@ -310,7 +310,7 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                       ChatRecord.datasource_select_answer, ChatRecord.analysis_record_id, ChatRecord.predict_record_id,
                       ChatRecord.regenerate_record_id,
                       ChatRecord.recommended_question, ChatRecord.first_chat,
-                      ChatRecord.finish, ChatRecord.error, ChatRecord.data, ChatRecord.predict_data).where(
+                      ChatRecord.finish, ChatRecord.error, ChatRecord.intent_answer, ChatRecord.data, ChatRecord.predict_data).where(
             and_(ChatRecord.create_by == current_user.id, ChatRecord.chat_id == chart_id)).order_by(
             ChatRecord.create_time)
 
@@ -333,6 +333,7 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                                  chart_reasoning_content=row.chart_reasoning_content,
                                  analysis_reasoning_content=row.analysis_reasoning_content,
                                  predict_reasoning_content=row.predict_reasoning_content,
+                                 intent_answer=row.intent_answer,
                                  ))
         else:
             record_list.append(
@@ -345,7 +346,9 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                                  analysis_record_id=row.analysis_record_id, predict_record_id=row.predict_record_id,
                                  regenerate_record_id=row.regenerate_record_id,
                                  recommended_question=row.recommended_question, first_chat=row.first_chat,
-                                 finish=row.finish, error=row.error, data=row.data, predict_data=row.predict_data))
+                                 finish=row.finish, error=row.error, data=row.data, predict_data=row.predict_data,
+                                 intent_answer=row.intent_answer,
+                                 ))
 
     result = list(map(format_record, record_list))
 
@@ -409,6 +412,16 @@ def format_record(record: ChatRecordResult):
         except Exception:
             pass
 
+    # 解析 intent_answer，将 response 映射到 intent_response 供前端展示
+    if record.intent_answer and record.intent_answer.strip():
+        try:
+            intent_obj = orjson.loads(record.intent_answer)
+            # 统一使用 response 字段（OTHER 或澄清追问）
+            if intent_obj.get('response'):
+                _dict['intent_response'] = intent_obj.get('response')
+        except Exception as e:
+            SQLBotLogUtil.debug(f"Intent answer parsing failed: {e}")
+
     return _dict
 
 
@@ -424,6 +437,20 @@ def list_generate_sql_logs(session: SessionDep, chart_id: int) -> List[ChatLog]:
     stmt = select(ChatLog).where(
         and_(ChatLog.pid.in_(select(ChatRecord.id).where(and_(ChatRecord.chat_id == chart_id))),
              ChatLog.type == TypeEnum.CHAT, ChatLog.operate == OperationEnum.GENERATE_SQL)).order_by(
+        ChatLog.start_time)
+    result = session.execute(stmt).all()
+    _list = []
+    for row in result:
+        for r in row:
+            _list.append(ChatLog(**r.model_dump()))
+    return _list
+
+
+def list_intent_logs(session: SessionDep, chat_id: int) -> List[ChatLog]:
+    """获取 chat_id 下所有 RECOGNIZE_INTENT 类型的 ChatLog"""
+    stmt = select(ChatLog).where(
+        and_(ChatLog.pid.in_(select(ChatRecord.id).where(ChatRecord.chat_id == chat_id)),
+             ChatLog.type == TypeEnum.CHAT, ChatLog.operate == OperationEnum.RECOGNIZE_INTENT)).order_by(
         ChatLog.start_time)
     result = session.execute(stmt).all()
     _list = []
@@ -625,6 +652,22 @@ def save_sql_answer(session: SessionDep, record_id: int, answer: str) -> ChatRec
 
     record = get_chat_record_by_id(session, record_id)
 
+    return record
+
+
+def save_intent_answer(session: SessionDep, record_id: int, answer: str) -> ChatRecord:
+    """保存意图识别结果（JSON 格式）"""
+    if not record_id:
+        raise Exception("Record id cannot be None")
+
+    stmt = update(ChatRecord).where(and_(ChatRecord.id == record_id)).values(
+        intent_answer=answer,
+    )
+
+    session.execute(stmt)
+    session.commit()
+
+    record = get_chat_record_by_id(session, record_id)
     return record
 
 
