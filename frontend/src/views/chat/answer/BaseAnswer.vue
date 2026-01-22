@@ -16,7 +16,8 @@ const props = withDefaults(
       | 'chart_answer'
       | 'analysis_thinking'
       | 'predict'
-      | Array<'sql_answer' | 'chart_answer' | 'analysis_thinking' | 'predict'>
+      | 'intent_answer'
+      | Array<'sql_answer' | 'chart_answer' | 'analysis_thinking' | 'predict' | 'intent_answer'>
   }>(),
   {
     loading: false,
@@ -30,7 +31,7 @@ const chatConfig = useChatConfigStore()
 const show = ref<boolean>(false)
 
 const reasoningContent = computed<Array<string>>(() => {
-  const names: Array<'sql_answer' | 'chart_answer' | 'analysis_thinking' | 'predict'> = []
+  const names: Array<'sql_answer' | 'chart_answer' | 'analysis_thinking' | 'predict' | 'intent_answer'> = []
   if (typeof props.reasoningName === 'string') {
     names.push(props.reasoningName)
   } else {

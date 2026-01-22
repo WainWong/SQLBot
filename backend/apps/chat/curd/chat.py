@@ -276,6 +276,8 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
     chart_alias_log = aliased(ChatLog)
     analysis_alias_log = aliased(ChatLog)
     predict_alias_log = aliased(ChatLog)
+    intent_alias_log = aliased(ChatLog)
+    clarify_alias_log = aliased(ChatLog)
 
     stmt = (select(ChatRecord.id, ChatRecord.chat_id, ChatRecord.create_time, ChatRecord.finish_time,
                    ChatRecord.question, ChatRecord.sql_answer, ChatRecord.sql,
@@ -287,7 +289,9 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                    sql_alias_log.reasoning_content.label('sql_reasoning_content'),
                    chart_alias_log.reasoning_content.label('chart_reasoning_content'),
                    analysis_alias_log.reasoning_content.label('analysis_reasoning_content'),
-                   predict_alias_log.reasoning_content.label('predict_reasoning_content')
+                   predict_alias_log.reasoning_content.label('predict_reasoning_content'),
+                   intent_alias_log.reasoning_content.label('intent_reasoning_content'),
+                   clarify_alias_log.reasoning_content.label('clarify_reasoning_content')
                    )
     .outerjoin(sql_alias_log, and_(sql_alias_log.pid == ChatRecord.id,
                                    sql_alias_log.type == TypeEnum.CHAT,
@@ -301,18 +305,50 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
     .outerjoin(predict_alias_log, and_(predict_alias_log.pid == ChatRecord.id,
                                        predict_alias_log.type == TypeEnum.CHAT,
                                        predict_alias_log.operate == OperationEnum.PREDICT_DATA))
+    .outerjoin(intent_alias_log, and_(intent_alias_log.pid == ChatRecord.id,
+                                      intent_alias_log.type == TypeEnum.CHAT,
+                                      intent_alias_log.operate == OperationEnum.RECOGNIZE_INTENT))
+    .outerjoin(clarify_alias_log, and_(clarify_alias_log.pid == ChatRecord.id,
+                                       clarify_alias_log.type == TypeEnum.CHAT,
+                                       clarify_alias_log.operate == OperationEnum.GENERATE_CLARIFICATION))
     .where(and_(ChatRecord.create_by == current_user.id, ChatRecord.chat_id == chart_id)).order_by(
         ChatRecord.create_time))
     if with_data:
-        stmt = select(ChatRecord.id, ChatRecord.chat_id, ChatRecord.create_time, ChatRecord.finish_time,
+        stmt = (select(ChatRecord.id, ChatRecord.chat_id, ChatRecord.create_time, ChatRecord.finish_time,
                       ChatRecord.question, ChatRecord.sql_answer, ChatRecord.sql,
                       ChatRecord.chart_answer, ChatRecord.chart, ChatRecord.analysis, ChatRecord.predict,
                       ChatRecord.datasource_select_answer, ChatRecord.analysis_record_id, ChatRecord.predict_record_id,
                       ChatRecord.regenerate_record_id,
                       ChatRecord.recommended_question, ChatRecord.first_chat,
-                      ChatRecord.finish, ChatRecord.error, ChatRecord.intent_answer, ChatRecord.data, ChatRecord.predict_data).where(
-            and_(ChatRecord.create_by == current_user.id, ChatRecord.chat_id == chart_id)).order_by(
-            ChatRecord.create_time)
+                      ChatRecord.finish, ChatRecord.error, ChatRecord.intent_answer,
+                      ChatRecord.data, ChatRecord.predict_data,
+                      sql_alias_log.reasoning_content.label('sql_reasoning_content'),
+                      chart_alias_log.reasoning_content.label('chart_reasoning_content'),
+                      analysis_alias_log.reasoning_content.label('analysis_reasoning_content'),
+                      predict_alias_log.reasoning_content.label('predict_reasoning_content'),
+                      intent_alias_log.reasoning_content.label('intent_reasoning_content'),
+                      clarify_alias_log.reasoning_content.label('clarify_reasoning_content')
+                      )
+        .outerjoin(sql_alias_log, and_(sql_alias_log.pid == ChatRecord.id,
+                                       sql_alias_log.type == TypeEnum.CHAT,
+                                       sql_alias_log.operate == OperationEnum.GENERATE_SQL))
+        .outerjoin(chart_alias_log, and_(chart_alias_log.pid == ChatRecord.id,
+                                         chart_alias_log.type == TypeEnum.CHAT,
+                                         chart_alias_log.operate == OperationEnum.GENERATE_CHART))
+        .outerjoin(analysis_alias_log, and_(analysis_alias_log.pid == ChatRecord.id,
+                                            analysis_alias_log.type == TypeEnum.CHAT,
+                                            analysis_alias_log.operate == OperationEnum.ANALYSIS))
+        .outerjoin(predict_alias_log, and_(predict_alias_log.pid == ChatRecord.id,
+                                           predict_alias_log.type == TypeEnum.CHAT,
+                                           predict_alias_log.operate == OperationEnum.PREDICT_DATA))
+        .outerjoin(intent_alias_log, and_(intent_alias_log.pid == ChatRecord.id,
+                                          intent_alias_log.type == TypeEnum.CHAT,
+                                          intent_alias_log.operate == OperationEnum.RECOGNIZE_INTENT))
+        .outerjoin(clarify_alias_log, and_(clarify_alias_log.pid == ChatRecord.id,
+                                           clarify_alias_log.type == TypeEnum.CHAT,
+                                           clarify_alias_log.operate == OperationEnum.GENERATE_CLARIFICATION))
+        .where(and_(ChatRecord.create_by == current_user.id, ChatRecord.chat_id == chart_id)).order_by(
+            ChatRecord.create_time))
 
     result = session.execute(stmt).all()
     record_list: list[ChatRecordResult] = []
@@ -333,6 +369,8 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                                  chart_reasoning_content=row.chart_reasoning_content,
                                  analysis_reasoning_content=row.analysis_reasoning_content,
                                  predict_reasoning_content=row.predict_reasoning_content,
+                                 intent_reasoning_content=row.intent_reasoning_content,
+                                 clarify_reasoning_content=row.clarify_reasoning_content,
                                  intent_answer=row.intent_answer,
                                  ))
         else:
@@ -347,6 +385,12 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                                  regenerate_record_id=row.regenerate_record_id,
                                  recommended_question=row.recommended_question, first_chat=row.first_chat,
                                  finish=row.finish, error=row.error, data=row.data, predict_data=row.predict_data,
+                                 sql_reasoning_content=row.sql_reasoning_content,
+                                 chart_reasoning_content=row.chart_reasoning_content,
+                                 analysis_reasoning_content=row.analysis_reasoning_content,
+                                 predict_reasoning_content=row.predict_reasoning_content,
+                                 intent_reasoning_content=row.intent_reasoning_content,
+                                 clarify_reasoning_content=row.clarify_reasoning_content,
                                  intent_answer=row.intent_answer,
                                  ))
 
@@ -368,12 +412,32 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
 def format_record(record: ChatRecordResult):
     _dict = record.model_dump()
 
+    # 处理 sql_answer（SQL 生成思考内容）
+    sql_thinking = ''
     if record.sql_answer and record.sql_answer.strip() != '' and record.sql_answer.strip()[0] == '{' and \
             record.sql_answer.strip()[-1] == '}':
         _obj = orjson.loads(record.sql_answer)
-        _dict['sql_answer'] = _obj.get('reasoning_content')
+        sql_thinking = _obj.get('reasoning_content') or ''
     if record.sql_reasoning_content and record.sql_reasoning_content.strip() != '':
-        _dict['sql_answer'] = record.sql_reasoning_content
+        sql_thinking = record.sql_reasoning_content
+
+    # 处理 intent_answer（意图识别 + 澄清器思考内容）
+    intent_thinking = ''
+    # 先获取意图识别的思考内容
+    if record.intent_reasoning_content and record.intent_reasoning_content.strip() != '':
+        intent_thinking = record.intent_reasoning_content
+    # 追加澄清器的思考内容
+    if record.clarify_reasoning_content and record.clarify_reasoning_content.strip() != '':
+        if intent_thinking:
+            intent_thinking += '\n\n---\n\n'  # 分隔符
+        intent_thinking += record.clarify_reasoning_content
+
+    # 独立展示（不再合并）
+    if sql_thinking:
+        _dict['sql_answer'] = sql_thinking
+    if intent_thinking:
+        _dict['intent_answer'] = intent_thinking
+
     if record.chart_answer and record.chart_answer.strip() != '' and record.chart_answer.strip()[0] == '{' and \
             record.chart_answer.strip()[-1] == '}':
         _obj = orjson.loads(record.chart_answer)

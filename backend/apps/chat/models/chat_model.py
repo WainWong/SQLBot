@@ -153,6 +153,8 @@ class ChatRecordResult(BaseModel):
     chart_reasoning_content: Optional[str] = None
     analysis_reasoning_content: Optional[str] = None
     predict_reasoning_content: Optional[str] = None
+    intent_reasoning_content: Optional[str] = None  # 意图识别思考过程
+    clarify_reasoning_content: Optional[str] = None  # 澄清器思考过程
     # 意图识别结果（JSON 格式存储）
     intent_answer: Optional[str] = None
     intent_response: Optional[str] = None  # 意图识别响应（供前端展示）

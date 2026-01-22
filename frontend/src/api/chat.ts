@@ -53,6 +53,7 @@ export class ChatRecord {
   predict_record_id?: number
   regenerate_record_id?: number
   intent_response?: string  // 意图识别响应（OTHER/澄清）
+  intent_answer?: string  // 意图识别思考内容
 
   constructor()
   constructor(
@@ -271,6 +272,7 @@ const toChatRecord = (data?: any): ChatRecord | undefined => {
     data.regenerate_record_id
   )
   record.intent_response = data.intent_response
+  record.intent_answer = data.intent_answer
   return record
 }
 const toChatRecordList = (list: any = []): ChatRecord[] => {

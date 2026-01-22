@@ -13,7 +13,7 @@ const props = withDefaults(
     currentChat?: ChatInfo
     message?: ChatMessage
     loading?: boolean
-    reasoningName: 'sql_answer' | 'chart_answer' | Array<'sql_answer' | 'chart_answer'>
+    reasoningName: 'sql_answer' | 'chart_answer' | 'intent_answer' | Array<'sql_answer' | 'chart_answer' | 'intent_answer'>
   }>(),
   {
     recordId: undefined,
@@ -113,6 +113,7 @@ const sendMessage = async () => {
 
     let sql_answer = ''
     let chart_answer = ''
+    let intent_answer = ''
 
     let tempResult = ''
 
@@ -186,6 +187,10 @@ const sendMessage = async () => {
               case 'error':
                 currentRecord.error = data.content
                 emits('error')
+                break
+              case 'intent-result':
+                intent_answer += data.reasoning_content
+                _currentChat.value.records[index.value].intent_answer = intent_answer
                 break
               case 'sql-result':
                 sql_answer += data.reasoning_content

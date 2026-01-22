@@ -305,11 +305,21 @@ class LLMService:
 
         # 3. LLM 调用
         full_text = ''
+        full_thinking_text = ''
         token_usage = {}
         res = process_stream(self.llm.stream(self.intent_message), token_usage)
         for chunk in res:
             if chunk.get('content'):
                 full_text += chunk.get('content')
+            if chunk.get('reasoning_content'):
+                full_thinking_text += chunk.get('reasoning_content')
+            # 流式输出意图识别思考过程
+            if in_chat and chunk.get('reasoning_content'):
+                yield 'data:' + orjson.dumps({
+                    'content': '',
+                    'reasoning_content': chunk.get('reasoning_content'),
+                    'type': 'intent-result'
+                }).decode() + '\n\n'
 
         # 4. 解析结果 & 记录
         json_str = extract_nested_json(full_text)
@@ -320,6 +330,7 @@ class LLMService:
                 session=session,
                 log=intent_log,
                 full_message=[{'type': msg.type, 'content': msg.content} for msg in self.intent_message],
+                reasoning_content=full_thinking_text,
                 token_usage=token_usage
             )
             self._intent_result = {'rewritten_query': self.chat_question.question}
@@ -333,6 +344,7 @@ class LLMService:
                 session=session,
                 log=intent_log,
                 full_message=[{'type': msg.type, 'content': msg.content} for msg in self.intent_message],
+                reasoning_content=full_thinking_text,
                 token_usage=token_usage
             )
             self._intent_result = {'rewritten_query': self.chat_question.question}
@@ -343,6 +355,7 @@ class LLMService:
             session=session,
             log=intent_log,
             full_message=[{'type': msg.type, 'content': msg.content} for msg in self.intent_message],
+            reasoning_content=full_thinking_text,
             token_usage=token_usage
         )
 
@@ -413,12 +426,30 @@ class LLMService:
         )
 
         # 4. LLM 调用 (澄清器)
+        # 在澄清器思考内容前添加分隔线
+        if in_chat:
+            yield 'data:' + orjson.dumps({
+                'content': '',
+                'reasoning_content': '\n\n---\n\n',
+                'type': 'intent-result'
+            }).decode() + '\n\n'
+
         clarify_text = ""
+        clarify_thinking_text = ""
         clarify_token_usage = {}
         clarify_res = process_stream(self.llm.stream(clarification_msgs), clarify_token_usage)
         for chunk in clarify_res:
             if chunk.get('content'):
                 clarify_text += chunk.get('content')
+            if chunk.get('reasoning_content'):
+                clarify_thinking_text += chunk.get('reasoning_content')
+            # 流式输出澄清器思考过程
+            if in_chat and chunk.get('reasoning_content'):
+                yield 'data:' + orjson.dumps({
+                    'content': '',
+                    'reasoning_content': chunk.get('reasoning_content'),
+                    'type': 'intent-result'
+                }).decode() + '\n\n'
 
         # 解析澄清结果
         clarify_json = extract_nested_json(clarify_text)
@@ -429,6 +460,7 @@ class LLMService:
                 session=session,
                 log=clarify_log,
                 full_message=[{'type': msg.type, 'content': msg.content} for msg in clarification_msgs],
+                reasoning_content=clarify_thinking_text,
                 token_usage=clarify_token_usage
             )
             self._intent_result = {'rewritten_query': self.chat_question.question}
@@ -442,6 +474,7 @@ class LLMService:
                 session=session,
                 log=clarify_log,
                 full_message=[{'type': msg.type, 'content': msg.content} for msg in clarification_msgs],
+                reasoning_content=clarify_thinking_text,
                 token_usage=clarify_token_usage
             )
             self._intent_result = {'rewritten_query': self.chat_question.question}
@@ -453,6 +486,7 @@ class LLMService:
             session=session,
             log=clarify_log,
             full_message=[{'type': msg.type, 'content': msg.content} for msg in clarification_msgs],
+            reasoning_content=clarify_thinking_text,
             token_usage=clarify_token_usage
         )
 
