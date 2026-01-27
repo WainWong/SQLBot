@@ -639,6 +639,9 @@ template:
       - 当前数据库表列表：
       {table_list}
 
+      - 表关系：
+      {table_relations}
+
       [用户输入格式]
       用户的提问在 <user-question> 内，<background-infos> 内的 <current-time> 会告诉你用户当前提问的时间。
       请结合当前时间理解用户问题中的时间相关表述（如"今年"、"上个月"、"最近"等）。

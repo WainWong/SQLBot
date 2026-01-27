@@ -38,7 +38,7 @@ from apps.data_training.curd.data_training import get_training_template
 from apps.datasource.crud.datasource import get_table_schema, get_table_schema_by_names, get_table_obj_by_ds, get_mschema_by_table_names
 from apps.datasource.crud.permission import get_row_permission_filters, is_normal_user
 from apps.datasource.embedding.ds_embedding import get_ds_embedding
-from apps.datasource.models.datasource import CoreDatasource
+from apps.datasource.models.datasource import CoreDatasource, CoreTable, CoreField
 from apps.db.db import exec_sql, get_version, check_connection
 from apps.system.crud.assistant import AssistantOutDs, AssistantOutDsFactory, get_assistant_ds
 from apps.system.crud.parameter_manage import get_groups
@@ -244,6 +244,43 @@ class LLMService:
             lines.append(f"- {name}: {comment}")
         return "\n".join(lines)
 
+    def _get_all_table_relations(self, session: Session) -> str:
+        """获取所有表关系（用于意图识别）"""
+        if not self.ds.table_relation:
+            return ""
+
+        relations = [r for r in self.ds.table_relation if r.get('shape') == 'edge']
+        if not relations:
+            return ""
+
+        # 获取所有涉及的表ID和字段ID
+        table_ids = set()
+        field_ids = set()
+        for r in relations:
+            table_ids.add(r.get('source').get('cell'))
+            table_ids.add(r.get('target').get('cell'))
+            field_ids.add(r.get('source').get('port'))
+            field_ids.add(r.get('target').get('port'))
+
+        # 查询表名和字段名映射
+        table_records = session.query(CoreTable).filter(CoreTable.id.in_(list(map(int, table_ids)))).all()
+        table_dict = {t.id: t.table_name for t in table_records}
+
+        field_records = session.query(CoreField).filter(CoreField.id.in_(list(map(int, field_ids)))).all()
+        field_dict = {f.id: f.field_name for f in field_records}
+
+        # 拼接输出
+        lines = ["【Foreign keys】"]
+        for r in relations:
+            src_table = table_dict.get(int(r.get('source').get('cell')))
+            src_field = field_dict.get(int(r.get('source').get('port')))
+            tgt_table = table_dict.get(int(r.get('target').get('cell')))
+            tgt_field = field_dict.get(int(r.get('target').get('port')))
+            if src_table and src_field and tgt_table and tgt_field:
+                lines.append(f"{src_table}.{src_field}={tgt_table}.{tgt_field}")
+
+        return "\n".join(lines) if len(lines) > 1 else ""
+
     def init_intent_messages(self, session: Session):
         """构建意图识别的消息列表（仿照 init_messages）"""
         last_messages = self.intent_logs[-1].messages if len(self.intent_logs) > 0 else []
@@ -251,11 +288,13 @@ class LLMService:
         self.intent_message = []
         # 1. System Prompt
         table_list = self._get_all_tables_brief(session)
+        table_relations = self._get_all_table_relations(session)
         template = get_base_template()
         intent_template = template['template']['intent_recognition']['system']
         self.intent_message.append(SystemMessage(
             content=intent_template.format(
                 table_list=table_list,
+                table_relations=table_relations,
                 lang=self.chat_question.lang
             )
         ))
