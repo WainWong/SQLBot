@@ -118,6 +118,9 @@ class Settings(BaseSettings):
     # 意图识别配置
     INTENT_RECOGNITION_ENABLED: bool = False  # 默认关闭
 
+    # 推荐问题配置（LLM生成）
+    RECOMMENDED_QUESTIONS_ENABLED: bool = True
+
     ORACLE_CLIENT_PATH: str = '/opt/sqlbot/db_client/oracle_instant_client'
 
     @field_validator('SQL_DEBUG',
@@ -127,6 +130,7 @@ class Settings(BaseSettings):
                      'PG_POOL_PRE_PING',
                      'TABLE_EMBEDDING_ENABLED',
                      'INTENT_RECOGNITION_ENABLED',
+                     'RECOMMENDED_QUESTIONS_ENABLED',
                      mode='before')
     @classmethod
     def lowercase_bool(cls, v: Any) -> Any:
