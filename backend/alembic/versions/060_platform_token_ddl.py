@@ -1,7 +1,7 @@
 """060_platform_token_ddl
 
 Revision ID: b40e41c67db3
-Revises: db1a95567cbb
+Revises: a1b2c3d4e5f6
 Create Date: 2026-01-04 15:50:31.550287
 
 """
@@ -12,7 +12,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = 'b40e41c67db3'
-down_revision = 'db1a95567cbb'
+down_revision = 'a1b2c3d4e5f6'
 branch_labels = None
 depends_on = None
 
