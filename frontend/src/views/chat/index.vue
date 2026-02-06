@@ -242,7 +242,7 @@
                       v-if="message.record?.intent_response"
                       class="intent-response"
                     >
-                      {{ message.record.intent_response }}
+                      <MdComponent :message="message.record.intent_response" />
                     </div>
                     <ErrorInfo :error="message.record?.error" class="error-container" />
                     <template #tool>
@@ -468,6 +468,7 @@ import ChatCreator from '@/views/chat/ChatCreator.vue'
 import ChatTokenTime from '@/views/chat/ChatTokenTime.vue'
 import ErrorInfo from './ErrorInfo.vue'
 import ChatToolBar from './ChatToolBar.vue'
+import MdComponent from '@/views/chat/component/MdComponent.vue'
 import { dsTypeWithImg } from '@/views/ds/js/ds-type'
 import { useI18n } from 'vue-i18n'
 import { find, forEach } from 'lodash-es'
@@ -1340,15 +1341,24 @@ onMounted(() => {
 .intent-response {
   margin-top: 8px;
   padding: 12px 16px;
-  font-weight: 400;
-  font-size: 16px;
-  line-height: 24px;
-  color: rgba(31, 35, 41, 1);
-  white-space: pre-wrap;
-  word-break: break-word;
-  background-color: rgba(230, 247, 230, 0.6);
+  background-color: rgba(28, 186, 144, 0.06);
   border-radius: 8px;
-  border-left: 3px solid rgba(82, 196, 82, 0.8);
+  border-left: 3px solid rgba(28, 186, 144, 0.5);
+
+  :deep(.markdown-body) {
+    background-color: transparent;
+    font-weight: 400;
+    font-size: 16px;
+    line-height: 24px;
+    color: rgba(31, 35, 41, 1);
+
+    p:last-child {
+      margin-bottom: 0;
+    }
+    p:first-child {
+      margin-top: 0;
+    }
+  }
 }
 
 .error-container {
