@@ -741,7 +741,9 @@
       "FILTER_SQL_EXAMPLE": "SQL 예시 매칭",
       "FILTER_CUSTOM_PROMPT": "사용자 정의 프롬프트 매칭",
       "EXECUTE_SQL": "SQL 실행",
-      "GENERATE_PICTURE": "이미지 생성"
+      "GENERATE_PICTURE": "이미지 생성",
+      "RECOGNIZE_INTENT": "의도 인식",
+      "GENERATE_CLARIFICATION": "명확화 질문 생성"
     }
   },
   "about": {

@@ -329,10 +329,9 @@ class LLMService:
             )
         ))
 
-        # 2. 历史消息（限制数量，仿照 sql_message）
-        count_limit = 0 - base_message_count_limit
+        # 2. 历史消息（不限轮次，使用全部历史以保持意图识别上下文完整）
         if last_messages is not None and len(last_messages) > 0:
-            for msg in last_messages[count_limit:]:
+            for msg in last_messages:
                 if msg.get('type') == 'human':
                     self.intent_message.append(HumanMessage(content=msg.get('content')))
                 elif msg.get('type') == 'ai':
@@ -678,6 +677,9 @@ class LLMService:
                                                                       full_message=example_list)
 
     def choose_table_schema(self, _session: Session):
+        # 如果 db_schema 已设置（如意图识别的 guess_tables），跳过 RAG 搜索
+        if self.chat_question.db_schema:
+            return
         self.current_logs[OperationEnum.CHOOSE_TABLE] = start_log(session=_session,
                                                                   operate=OperationEnum.CHOOSE_TABLE,
                                                                   record_id=self.record.id,
@@ -1421,7 +1423,9 @@ class LLMService:
 
                 self.filter_custom_prompts(_session, CustomPromptTypeEnum.GENERATE_SQL, oid, ds_id)
 
-                self.init_messages(_session)
+                # 意图识别启用时，延迟到意图识别完成后再 init_messages
+                if not settings.INTENT_RECOGNITION_ENABLED:
+                    self.init_messages(_session)
 
             # return id
             if in_chat:
@@ -1456,7 +1460,7 @@ class LLMService:
                         self._intent_result['guess_tables']
                     )
                     # 重新初始化消息，使用更新后的 db_schema
-                    self.init_messages()
+                    self.init_messages(_session)
                 elif not self.chat_question.db_schema:
                     # fallback: 如果没有 guess_tables 且 db_schema 未设置，走原 RAG 流程
                     self.chat_question.db_schema = get_table_schema(
@@ -1464,7 +1468,7 @@ class LLMService:
                         question=self.chat_question.question
                     )
                     # 重新初始化消息，使用更新后的 db_schema
-                    self.init_messages()
+                    self.init_messages(_session)
             # ===== 意图识别结束 =====
 
                 # select datasource if datasource is none

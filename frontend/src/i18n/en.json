@@ -741,7 +741,9 @@
       "FILTER_SQL_EXAMPLE": "Match SQL Examples",
       "FILTER_CUSTOM_PROMPT": "Match Custom Prompts",
       "EXECUTE_SQL": "Execute SQL",
-      "GENERATE_PICTURE": "Generate Picture"
+      "GENERATE_PICTURE": "Generate Picture",
+      "RECOGNIZE_INTENT": "Recognize Intent",
+      "GENERATE_CLARIFICATION": "Generate Clarification"
     }
   },
   "about": {
