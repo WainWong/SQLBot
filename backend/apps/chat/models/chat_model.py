@@ -40,8 +40,14 @@ class OperationEnum(Enum):
     GENERATE_SQL_WITH_PERMISSIONS = '5'
     CHOOSE_DATASOURCE = '6'
     GENERATE_DYNAMIC_SQL = '7'
-    RECOGNIZE_INTENT = '8'  # 意图识别
-    GENERATE_CLARIFICATION = '9'  # 澄清追问生成
+    CHOOSE_TABLE = '8'
+    FILTER_TERMS = '9'
+    FILTER_SQL_EXAMPLE = '10'
+    FILTER_CUSTOM_PROMPT = '11'
+    EXECUTE_SQL = '12'
+    GENERATE_PICTURE = '13'
+    RECOGNIZE_INTENT = '99'  # 意图识别（重编号避免与上游冲突）
+    GENERATE_CLARIFICATION = '98'  # 澄清追问生成（重编号避免与上游冲突）
 
 
 class ChatFinishStep(Enum):
@@ -73,6 +79,8 @@ class ChatLog(SQLModel, table=True):
     start_time: datetime = Field(sa_column=Column(DateTime(timezone=False), nullable=True))
     finish_time: datetime = Field(sa_column=Column(DateTime(timezone=False), nullable=True))
     token_usage: Optional[dict | None | int] = Field(sa_column=Column(JSONB))
+    local_operation: bool = Field(default=False)
+    error: bool = Field(default=False)
 
 
 class Chat(SQLModel, table=True):
@@ -158,6 +166,8 @@ class ChatRecordResult(BaseModel):
     # 意图识别结果（JSON 格式存储）
     intent_answer: Optional[str] = None
     intent_response: Optional[str] = None  # 意图识别响应（供前端展示）
+    duration: Optional[float] = None  # 耗时字段（单位：秒）
+    total_tokens: Optional[int] = None  # token总消耗
 
 
 class CreateChat(BaseModel):
@@ -184,9 +194,28 @@ class ChatInfo(BaseModel):
     ds_type: str = ''
     datasource_name: str = ''
     datasource_exists: bool = True
-    recommended_question: Optional[str]  = None
-    recommended_generate: Optional[bool]  = False
+    recommended_question: Optional[str] = None
+    recommended_generate: Optional[bool] = False
     records: List[ChatRecord | dict] = []
+
+
+class ChatLogHistoryItem(BaseModel):
+    start_time: Optional[datetime] = None
+    finish_time: Optional[datetime] = None
+    duration: Optional[float] = None  # 耗时字段（单位：秒）
+    total_tokens: Optional[int] = None  # token总消耗
+    operate: Optional[str] = None
+    local_operation: Optional[bool] = False
+    message: Optional[str | dict | list] = None
+    error: Optional[bool] = False
+
+
+class ChatLogHistory(BaseModel):
+    start_time: Optional[datetime] = None
+    finish_time: Optional[datetime] = None
+    duration: Optional[float] = None  # 耗时字段（单位：秒）
+    total_tokens: Optional[int] = None  # token总消耗
+    steps: List[ChatLogHistoryItem | dict] = []
 
 
 class AiModelQuestion(BaseModel):
@@ -246,9 +275,9 @@ class AiModelQuestion(BaseModel):
     def chart_sys_question(self):
         return get_chart_template()['system'].format(sql=self.sql, question=self.question, lang=self.lang)
 
-    def chart_user_question(self, chart_type: Optional[str] = None):
+    def chart_user_question(self, chart_type: Optional[str] = '', schema: Optional[str] = ''):
         return get_chart_template()['user'].format(sql=self.sql, question=self.question, rule=self.rule,
-                                                   chart_type=chart_type)
+                                                   chart_type=chart_type, schema=schema)
 
     def analysis_sys_question(self):
         return get_analysis_template()['system'].format(lang=self.lang, terminologies=self.terminologies,
@@ -291,6 +320,7 @@ class AiModelQuestion(BaseModel):
 
 class ChatQuestion(AiModelQuestion):
     chat_id: int
+    datasource_id: Optional[int] = None
 
 
 class ChatMcp(ChatQuestion):
@@ -308,6 +338,7 @@ class McpQuestion(BaseModel):
     token: str = Body(description='token')
     stream: Optional[bool] = Body(description='是否流式输出，默认为true开启, 关闭false则返回JSON对象', default=True)
     lang: Optional[str] = Body(description='语言：zh-CN|en|ko-KR', default='zh-CN')
+    datasource_id: Optional[int | str] = Body(description='数据源ID，仅当当前对话没有确定数据源时有效', default=None)
 
 
 class AxisObj(BaseModel):

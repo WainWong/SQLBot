@@ -56,10 +56,12 @@ const routerList = computed(() => {
       !route.path.includes('training') &&
       !route.path.includes('prompt') &&
       !route.path.includes('permission') &&
+      !route.path.includes('embeddedCommon') &&
       !route.path.includes('preview') &&
       !route.path.includes('audit') &&
       route.path !== '/login' &&
       route.path !== '/admin-login' &&
+      route.path !== '/chatPreview' &&
       !route.path.includes('/system') &&
       ((route.path.includes('set') && userStore.isSpaceAdmin) || !route.redirect) &&
       route.path !== '/:pathMatch(.*)*' &&

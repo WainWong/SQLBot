@@ -186,7 +186,7 @@ const sendMessage = async () => {
                 break
               case 'error':
                 currentRecord.error = data.content
-                emits('error')
+                emits('error', currentRecord.id)
                 break
               case 'intent-result':
                 intent_answer += data.reasoning_content

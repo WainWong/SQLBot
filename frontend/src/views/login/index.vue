@@ -63,7 +63,6 @@
             </el-form>
           </div>
           <Handler
-            ref="xpackLoginHandler"
             v-model:loading="showLoading"
             jsname="L2NvbXBvbmVudC9sb2dpbi9IYW5kbGVy"
             @switch-tab="switchTab"
@@ -85,13 +84,13 @@ import login_image from '@/assets/embedded/login_image.png'
 import { useAppearanceStoreWithOut } from '@/stores/appearance'
 import loginImage from '@/assets/blue/login-image_blue.png'
 import Handler from './xpack/Handler.vue'
+import { toLoginSuccess } from '@/utils/utils'
 
 const showLoading = ref(true)
 const router = useRouter()
 const userStore = useUserStore()
 const appearanceStore = useAppearanceStoreWithOut()
 const { t } = useI18n()
-const xpackLoginHandler = ref<any>(null)
 const loginForm = ref({
   username: '',
   password: '',
@@ -118,7 +117,7 @@ const submitForm = () => {
   loginFormRef.value.validate((valid: boolean) => {
     if (valid) {
       userStore.login(loginForm.value).then(() => {
-        router.push('/chat')
+        toLoginSuccess(router)
       })
     }
   })
@@ -201,7 +200,7 @@ const switchTab = (name: string) => {
 
         .login-btn {
           width: 100%;
-          height: 45px;
+          height: 40px;
           font-size: 16px;
           border-radius: 4px;
         }
